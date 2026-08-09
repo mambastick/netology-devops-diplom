@@ -104,6 +104,7 @@ jobs:
           yc managed-kubernetes cluster get-credentials \
             --id "${{ vars.KUBERNETES_CLUSTER_ID }}" \
             --external \
+            --kubeconfig "$KUBECONFIG" \
             --force
 
       - name: Deploy application
