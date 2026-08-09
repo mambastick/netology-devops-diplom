@@ -112,7 +112,6 @@ jobs:
           IMAGE: ${{ steps.image.outputs.image }}
         shell: bash
         run: |
-          kubectl apply -f kubernetes/application/namespace.yaml
           kubectl apply -f kubernetes/application/deployment.yaml
           kubectl apply -f kubernetes/application/service.yaml
           kubectl set image deployment/diplom-app diplom-app="$IMAGE" --namespace diplom
