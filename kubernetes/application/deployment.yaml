@@ -17,6 +17,9 @@ spec:
         app.kubernetes.io/name: diplom-app
         app.kubernetes.io/part-of: netology-diplom
     spec:
+      securityContext:
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: diplom-app
           image: cr.yandex/crpir2qgou0nqqfn9ccn/diplom-app:latest
@@ -54,3 +57,10 @@ spec:
             runAsUser: 101
             seccompProfile:
               type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
