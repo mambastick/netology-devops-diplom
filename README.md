@@ -1,41 +1,62 @@
-# Дипломный практикум в Yandex Cloud
+# Дипломный проект в Yandex Cloud
 
-[Оригинальное задание](https://github.com/netology-code/devops-diplom-yandexcloud)
+[Задание на диплом](https://github.com/netology-code/devops-diplom-yandexcloud)
 
-## Цель проекта
+Для диплома я развернул в Yandex Cloud региональный кластер Managed Kubernetes, небольшое nginx-приложение и мониторинг на базе Prometheus и Grafana. Инфраструктура описана в Terraform, а сборка и деплой приложения выполняются через GitHub Actions.
 
-Подготовить в Yandex Cloud воспроизводимую инфраструктуру для Kubernetes, развернуть тестовое приложение и систему мониторинга, а также автоматизировать изменение инфраструктуры, сборку Docker-образа и его доставку в кластер.
+После проверки стенд был удалён, чтобы не оставлять платные облачные ресурсы. Скриншоты ниже сделаны до удаления.
 
-## План реализации
+## Инфраструктура
 
-1. Terraform создаёт сервисный аккаунт и Object Storage для хранения state.
-2. Отдельная Terraform-конфигурация создаёт VPC, подсети, группы безопасности, Container Registry и кластер Managed Kubernetes.
-3. В Kubernetes устанавливаются ingress-контроллер и стек мониторинга Prometheus, Grafana, Alertmanager и node_exporter.
-4. Тестовое nginx-приложение хранится в каталоге `app` вместе с Dockerfile и pipeline.
-5. GitHub Actions проверяет и применяет Terraform, собирает и публикует Docker-образ, а при создании тега разворачивает новую версию в Kubernetes.
+Terraform разделён на две части. Конфигурация в [`terraform/bootstrap`](terraform/bootstrap) создаёт сервисные аккаунты, KMS-ключ и бакет Object Storage для state. Основная конфигурация находится в [`terraform/infrastructure`](terraform/infrastructure): там описаны сеть, три подсети, Container Registry и региональный Kubernetes-кластер.
 
-## Структура проекта
+Worker-ноды были прерываемыми и находились в трёх зонах: `ru-central1-a`, `ru-central1-b` и `ru-central1-d`. Приложение работало в двух экземплярах и публиковалось через `LoadBalancer`.
 
-```text
-netology-devops-diplom/
-├── app/                     # тестовое приложение и Dockerfile
-├── terraform/
-│   ├── bootstrap/           # сервисный аккаунт и backend
-│   └── infrastructure/      # основная облачная инфраструктура
-├── kubernetes/
-│   ├── application/         # манифесты тестового приложения
-│   └── monitoring/          # Helm values и манифесты мониторинга
-├── docs/screenshots/                # скриншоты и результаты проверок
-└── README.md
+## Приложение и мониторинг
+
+Тестовая страница собирается из каталога [`app`](app). nginx запускается без root-прав на порту `8080`, а для проверки доступен endpoint `/healthz`.
+
+Манифесты приложения лежат в [`kubernetes/application`](kubernetes/application). Настройки `kube-prometheus-stack` находятся в [`kubernetes/monitoring`](kubernetes/monitoring). В Grafana использовались готовые Kubernetes-дашборды, а Prometheus собирал метрики со всех трёх worker-нод.
+
+## Автоматизация
+
+Workflow [`diplom-terraform.yml`](.github/workflows/diplom-terraform.yml) проверяет форматирование Terraform, выполняет `init`, `validate`, `plan` и применяет изменения из `main`.
+
+Workflow [`diplom-app.yml`](.github/workflows/diplom-app.yml) собирает Docker-образ, публикует его в Yandex Container Registry и обновляет Deployment в namespace `diplom`. При создании тега `v1.0.0` приложение было собрано и развёрнуто с таким же тегом.
+
+- [успешный запуск Terraform](https://github.com/mambastick/netology-devops-diplom/actions/runs/31328503689);
+- [сборка и деплой версии v1.0.0](https://github.com/mambastick/netology-devops-diplom/actions/runs/31330292867).
+
+## Проверка
+
+Основные команды, которыми я проверял стенд:
+
+```bash
+terraform -chdir=terraform/infrastructure plan
+kubectl get nodes
+kubectl get pods --all-namespaces
+kubectl get deployment,pods,service -n diplom
+helm status monitoring -n monitoring
 ```
 
-Pipeline для основной Terraform-конфигурации находится в [`.github/workflows/diplom-terraform.yml`](.github/workflows/diplom-terraform.yml).
+### Приложение
 
-## Ожидаемый результат
+![Тестовое приложение](docs/screenshots/application.png)
 
-- инфраструктура создаётся и удаляется без ручной настройки ресурсов;
-- Terraform state хранится в Object Storage;
-- `kubectl get pods --all-namespaces` выполняется без ошибок;
-- тестовое приложение и Grafana доступны из интернета;
-- дашборды Grafana отображают состояние Kubernetes;
-- коммит собирает Docker-образ, а тег публикует и разворачивает версию с соответствующей меткой.
+### Состояние Kubernetes
+
+![Состояние Kubernetes](docs/screenshots/kubernetes-status.png)
+
+### Мониторинг
+
+![Дашборд Grafana](docs/screenshots/grafana-nodes.png)
+
+### Деплой приложения
+
+![Успешный pipeline приложения](docs/screenshots/github-actions-app.png)
+
+### Terraform
+
+![Успешный pipeline Terraform](docs/screenshots/github-actions-terraform.png)
+
+Остальные снимки с выводом Terraform и `kubectl` находятся в каталоге [`docs/screenshots`](docs/screenshots).
