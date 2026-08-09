@@ -1,0 +1,5 @@
+cloud_id  = "b1gxxxxxxxxxxxxxxxxx"
+folder_id = "b1gxxxxxxxxxxxxxxxxx"
+
+# Override only when the generated globally unique name is unsuitable.
+# state_bucket_name = "netology-diplom-tfstate-example"

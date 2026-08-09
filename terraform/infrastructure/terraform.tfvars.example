@@ -1,0 +1,6 @@
+cloud_id                     = "b1gxxxxxxxxxxxxxxxxx"
+folder_id                    = "b1gxxxxxxxxxxxxxxxxx"
+kubernetes_service_account_id = "ajexxxxxxxxxxxxxxxxx"
+
+# Restrict these networks when the cluster does not need public administration.
+api_access_cidrs = ["203.0.113.10/32"]
