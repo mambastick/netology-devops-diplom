@@ -1,0 +1,119 @@
+name: Diplom Application
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "app/**"
+      - "kubernetes/application/**"
+      - ".github/workflows/diplom-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diplom-app-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_REPOSITORY: cr.yandex/${{ vars.CONTAINER_REGISTRY_ID }}/diplom-app
+  YC_KEY_FILE: /tmp/authorized_key.json
+  KUBECONFIG: /tmp/kubeconfig
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select image tag
+        id: image
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="sha-${GITHUB_SHA::7}"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_REPOSITORY:$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Yandex Cloud CLI
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --location \
+            https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
+            | bash -s -- -a
+          echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
+
+      - name: Configure Yandex Cloud credentials
+        env:
+          YC_KEY_JSON: ${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}
+        shell: bash
+        run: |
+          umask 077
+          printf '%s' "$YC_KEY_JSON" > "$YC_KEY_FILE"
+          "$HOME/yandex-cloud/bin/yc" config set service-account-key "$YC_KEY_FILE"
+          "$HOME/yandex-cloud/bin/yc" config set cloud-id "${{ vars.YC_CLOUD_ID }}"
+          "$HOME/yandex-cloud/bin/yc" config set folder-id "${{ vars.YC_FOLDER_ID }}"
+
+      - name: Log in to Container Registry
+        shell: bash
+        run: |
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          VERSION: ${{ steps.image.outputs.version }}
+        shell: bash
+        run: |
+          docker build \
+            --build-arg "APP_VERSION=$VERSION" \
+            --tag "$IMAGE" \
+            app
+          docker push "$IMAGE"
+
+          if [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "main" ]]; then
+            docker tag "$IMAGE" "$IMAGE_REPOSITORY:latest"
+            docker push "$IMAGE_REPOSITORY:latest"
+          fi
+
+      - name: Install kubectl
+        shell: bash
+        run: |
+          kubectl_version="v1.34.1"
+          curl --fail --silent --show-error --location --remote-name \
+            "https://dl.k8s.io/release/$kubectl_version/bin/linux/amd64/kubectl"
+          curl --fail --silent --show-error --location --remote-name \
+            "https://dl.k8s.io/release/$kubectl_version/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+      - name: Configure Kubernetes access
+        shell: bash
+        run: |
+          yc managed-kubernetes cluster get-credentials \
+            --id "${{ vars.KUBERNETES_CLUSTER_ID }}" \
+            --external \
+            --force
+
+      - name: Deploy application
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        shell: bash
+        run: |
+          kubectl apply -f kubernetes/application/namespace.yaml
+          kubectl apply -f kubernetes/application/deployment.yaml
+          kubectl apply -f kubernetes/application/service.yaml
+          kubectl set image deployment/diplom-app diplom-app="$IMAGE" --namespace diplom
+          kubectl rollout status deployment/diplom-app --namespace diplom --timeout=5m
+          kubectl get service diplom-app --namespace diplom
