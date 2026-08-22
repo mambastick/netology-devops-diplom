@@ -14,13 +14,15 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: diplom-app-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  IMAGE_REPOSITORY: cr.yandex/${{ vars.CONTAINER_REGISTRY_ID }}/diplom-app
+  YCR_IMAGE_REPOSITORY: cr.yandex/${{ vars.CONTAINER_REGISTRY_ID }}/diplom-app
+  GHCR_IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/netology-devops-diplom
   YC_KEY_FILE: /tmp/authorized_key.json
   KUBECONFIG: /tmp/kubeconfig
 
@@ -33,7 +35,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Select image tag
+      - name: Check required settings
+        shell: bash
+        run: |
+          test -n "${{ vars.CONTAINER_REGISTRY_ID }}"
+          test -n "${{ vars.KUBERNETES_CLUSTER_ID }}"
+          test -n "${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}"
+
+      - name: Select image version
         id: image
         shell: bash
         run: |
@@ -44,14 +53,13 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "image=$IMAGE_REPOSITORY:$version" >> "$GITHUB_OUTPUT"
+          echo "ycr_image=$YCR_IMAGE_REPOSITORY:$version" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=$GHCR_IMAGE_REPOSITORY:$version" >> "$GITHUB_OUTPUT"
 
       - name: Install Yandex Cloud CLI
         shell: bash
         run: |
-          curl --fail --silent --show-error --location \
-            https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
-            | bash -s -- -a
+          curl -fsSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -a
           echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
 
       - name: Configure Yandex Cloud credentials
@@ -61,44 +69,51 @@ jobs:
         run: |
           umask 077
           printf '%s' "$YC_KEY_JSON" > "$YC_KEY_FILE"
+          "$HOME/yandex-cloud/bin/yc" config profile create diplom-ci
           "$HOME/yandex-cloud/bin/yc" config set service-account-key "$YC_KEY_FILE"
           "$HOME/yandex-cloud/bin/yc" config set cloud-id "${{ vars.YC_CLOUD_ID }}"
           "$HOME/yandex-cloud/bin/yc" config set folder-id "${{ vars.YC_FOLDER_ID }}"
 
-      - name: Log in to Container Registry
+      - name: Log in to registries
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           yc iam create-token | docker login --username iam --password-stdin cr.yandex
+          printf '%s' "$GHCR_TOKEN" \
+            | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
 
       - name: Build and push image
         env:
-          IMAGE: ${{ steps.image.outputs.image }}
+          YCR_IMAGE: ${{ steps.image.outputs.ycr_image }}
+          GHCR_IMAGE: ${{ steps.image.outputs.ghcr_image }}
           VERSION: ${{ steps.image.outputs.version }}
         shell: bash
         run: |
           docker build \
             --build-arg "APP_VERSION=$VERSION" \
-            --tag "$IMAGE" \
+            --provenance=false \
+            --tag "$YCR_IMAGE" \
+            --tag "$GHCR_IMAGE" \
             app
-          docker push "$IMAGE"
+          docker push "$YCR_IMAGE"
+          docker push "$GHCR_IMAGE"
 
           if [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "main" ]]; then
-            docker tag "$IMAGE" "$IMAGE_REPOSITORY:latest"
-            docker push "$IMAGE_REPOSITORY:latest"
+            docker tag "$YCR_IMAGE" "$YCR_IMAGE_REPOSITORY:latest"
+            docker tag "$GHCR_IMAGE" "$GHCR_IMAGE_REPOSITORY:latest"
+            docker push "$YCR_IMAGE_REPOSITORY:latest"
+            docker push "$GHCR_IMAGE_REPOSITORY:latest"
           fi
 
       - name: Install kubectl
         shell: bash
         run: |
-          kubectl_version="v1.34.1"
-          curl --fail --silent --show-error --location --remote-name \
-            "https://dl.k8s.io/release/$kubectl_version/bin/linux/amd64/kubectl"
-          curl --fail --silent --show-error --location --remote-name \
-            "https://dl.k8s.io/release/$kubectl_version/bin/linux/amd64/kubectl.sha256"
-          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
-          sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+          curl -fsSLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
 
-      - name: Configure Kubernetes access
+      - name: Configure cluster access
         shell: bash
         run: |
           yc managed-kubernetes cluster get-credentials \
@@ -109,11 +124,13 @@ jobs:
 
       - name: Deploy application
         env:
-          IMAGE: ${{ steps.image.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.ycr_image }}
         shell: bash
         run: |
+          kubectl apply -f kubernetes/application/namespace.yaml
           kubectl apply -f kubernetes/application/deployment.yaml
           kubectl apply -f kubernetes/application/service.yaml
+          kubectl apply -f kubernetes/application/ingress.yaml
           kubectl set image deployment/diplom-app diplom-app="$IMAGE" --namespace diplom
           kubectl rollout status deployment/diplom-app --namespace diplom --timeout=5m
-          kubectl get service diplom-app --namespace diplom
+          kubectl get deployment,pods,service,ingress --namespace diplom

@@ -2,41 +2,42 @@
 
 [Задание на диплом](https://github.com/netology-code/devops-diplom-yandexcloud)
 
-Для диплома я развернул в Yandex Cloud региональный кластер Managed Kubernetes, небольшое nginx-приложение и мониторинг на базе Prometheus и Grafana. Инфраструктура описана в Terraform, а сборка и деплой приложения выполняются через GitHub Actions.
+Стенд сейчас работает и доступен из интернета:
 
-После проверки стенд был удалён, чтобы не оставлять платные облачные ресурсы. Скриншоты ниже сделаны до удаления.
+- [тестовое приложение](https://netology-devops-diplom.neelov.family);
+- [Grafana](https://grafana.netology-devops-diplom.neelov.family) — дашборды открываются без входа в режиме просмотра;
+- [Docker-образ приложения](https://github.com/mambastick/netology-devops-diplom/pkgs/container/netology-devops-diplom) — `ghcr.io/mambastick/netology-devops-diplom:v1.0.1`;
+- [все запуски GitHub Actions](https://github.com/mambastick/netology-devops-diplom/actions).
 
-## Инфраструктура
+Оба сайта работают по HTTPS. Обычные HTTP-запросы ingress-nginx перенаправляет на HTTPS, сертификаты выпускает и обновляет cert-manager через Let's Encrypt.
 
-Terraform разделён на две части. Конфигурация в [`terraform/bootstrap`](terraform/bootstrap) создаёт сервисные аккаунты, KMS-ключ и бакет Object Storage для state. Основная конфигурация находится в [`terraform/infrastructure`](terraform/infrastructure): там описаны сеть, три подсети, Container Registry и региональный Kubernetes-кластер.
+## Что развёрнуто
 
-Worker-ноды были прерываемыми и находились в трёх зонах: `ru-central1-a`, `ru-central1-b` и `ru-central1-d`. Приложение работало в двух экземплярах и публиковалось через `LoadBalancer`.
+Основную инфраструктуру создаёт Terraform: VPC, три подсети, Yandex Container Registry и региональный Managed Kubernetes. В кластере три прерываемые worker-ноды — по одной в `ru-central1-a`, `ru-central1-b` и `ru-central1-d`. Terraform state хранится в отдельном бакете Object Storage с версионированием и шифрованием KMS.
 
-## Приложение и мониторинг
+Приложение — статическая страница на nginx. Контейнер запускается без root-прав, слушает порт `8080` и отвечает на проверку `/healthz`. В Kubernetes работают две реплики, снаружи они доступны через общий Ingress.
 
-Тестовая страница собирается из каталога [`app`](app). nginx запускается без root-прав на порту `8080`, а для проверки доступен endpoint `/healthz`.
-
-Манифесты приложения лежат в [`kubernetes/application`](kubernetes/application). Настройки `kube-prometheus-stack` находятся в [`kubernetes/monitoring`](kubernetes/monitoring). В Grafana использовались готовые Kubernetes-дашборды, а Prometheus собирал метрики со всех трёх worker-нод.
+Мониторинг установлен chart'ом `kube-prometheus-stack`: Prometheus, Alertmanager, Grafana, kube-state-metrics и node-exporter. Grafana получает метрики со всех трёх worker-нод. Компоненты control plane, которые скрыты в Managed Kubernetes, отключены в настройках chart'а.
 
 ## Автоматизация
 
-Workflow [`diplom-terraform.yml`](.github/workflows/diplom-terraform.yml) проверяет форматирование Terraform, выполняет `init`, `validate`, `plan` и применяет изменения из `main`.
+Для разных частей стенда оставлены отдельные workflow:
 
-Workflow [`diplom-app.yml`](.github/workflows/diplom-app.yml) собирает Docker-образ, публикует его в Yandex Container Registry и обновляет Deployment в namespace `diplom`. При создании тега `v1.0.0` приложение было собрано и развёрнуто с таким же тегом.
+- [`diplom-terraform.yml`](.github/workflows/diplom-terraform.yml) проверяет конфигурацию Terraform, строит plan и применяет его для `main`;
+- [`diplom-platform.yml`](.github/workflows/diplom-platform.yml) устанавливает ingress-nginx, cert-manager и мониторинг;
+- [`diplom-app.yml`](.github/workflows/diplom-app.yml) собирает приложение, отправляет образ в Yandex Container Registry и GitHub Container Registry, затем обновляет Deployment.
 
-- [успешный запуск Terraform](https://github.com/mambastick/netology-devops-diplom/actions/runs/31328503689);
-- [сборка и деплой версии v1.0.0](https://github.com/mambastick/netology-devops-diplom/actions/runs/31330292867).
+Обычный коммит в `main`, затрагивающий приложение, получает тег образа вида `sha-xxxxxxx`. При создании Git-тега `v1.0.1` тот же тег получает Docker-образ, который после сборки разворачивается в кластере.
 
 ## Проверка
 
-Основные команды, которыми я проверял стенд:
-
 ```bash
 terraform -chdir=terraform/infrastructure plan
-kubectl get nodes
+kubectl get nodes -o wide
 kubectl get pods --all-namespaces
-kubectl get deployment,pods,service -n diplom
+kubectl get ingress,certificate --all-namespaces
 helm status monitoring -n monitoring
+curl -I https://netology-devops-diplom.neelov.family
 ```
 
 ### Приложение
@@ -59,4 +60,4 @@ helm status monitoring -n monitoring
 
 ![Успешный pipeline Terraform](docs/screenshots/github-actions-terraform.png)
 
-Остальные снимки с выводом Terraform и `kubectl` находятся в каталоге [`docs/screenshots`](docs/screenshots).
+Дополнительные снимки с выводом Terraform и `kubectl` находятся в каталоге [`docs/screenshots`](docs/screenshots).

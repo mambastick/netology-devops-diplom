@@ -2,6 +2,9 @@ FROM nginx:1.30.4-alpine
 
 ARG APP_VERSION=dev
 
+LABEL org.opencontainers.image.source="https://github.com/mambastick/netology-devops-diplom"
+LABEL org.opencontainers.image.description="Test application for the Netology DevOps diploma"
+
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY index.html /usr/share/nginx/html/index.html
 

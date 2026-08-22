@@ -24,8 +24,21 @@ grafana:
     auth.anonymous:
       enabled: true
       org_role: Viewer
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - grafana.netology-devops-diplom.neelov.family
+    path: /
+    tls:
+      - secretName: grafana-diplom-tls
+        hosts:
+          - grafana.netology-devops-diplom.neelov.family
   service:
-    type: LoadBalancer
+    type: ClusterIP
     port: 80
   resources:
     requests:

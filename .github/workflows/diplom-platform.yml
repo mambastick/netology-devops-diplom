@@ -1,0 +1,152 @@
+name: Diplom Platform
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "kubernetes/ingress/**"
+      - "kubernetes/monitoring/**"
+      - ".github/workflows/diplom-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diplom-platform
+  cancel-in-progress: false
+
+env:
+  YC_KEY_FILE: /tmp/authorized_key.json
+  KUBECONFIG: /tmp/kubeconfig
+
+jobs:
+  install:
+    name: Install platform components
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check required settings
+        shell: bash
+        run: |
+          test -n "${{ vars.CONTAINER_REGISTRY_ID }}"
+          test -n "${{ vars.KUBERNETES_CLUSTER_ID }}"
+          test -n "${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}"
+
+      - name: Install Yandex Cloud CLI
+        shell: bash
+        run: |
+          curl -fsSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -a
+          echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
+
+      - name: Configure Yandex Cloud credentials
+        env:
+          YC_KEY_JSON: ${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}
+        shell: bash
+        run: |
+          umask 077
+          printf '%s' "$YC_KEY_JSON" > "$YC_KEY_FILE"
+          "$HOME/yandex-cloud/bin/yc" config profile create diplom-platform
+          "$HOME/yandex-cloud/bin/yc" config set service-account-key "$YC_KEY_FILE"
+          "$HOME/yandex-cloud/bin/yc" config set cloud-id "${{ vars.YC_CLOUD_ID }}"
+          "$HOME/yandex-cloud/bin/yc" config set folder-id "${{ vars.YC_FOLDER_ID }}"
+
+      - name: Configure cluster access
+        shell: bash
+        run: |
+          yc managed-kubernetes cluster get-credentials \
+            --id "${{ vars.KUBERNETES_CLUSTER_ID }}" \
+            --external \
+            --kubeconfig "$KUBECONFIG" \
+            --force
+
+      - name: Mirror external images
+        shell: bash
+        run: |
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
+
+          images=(
+            "quay.io/jetstack/cert-manager-controller:v1.21.1|cert-manager-controller:v1.21.1"
+            "quay.io/jetstack/cert-manager-cainjector:v1.21.1|cert-manager-cainjector:v1.21.1"
+            "quay.io/jetstack/cert-manager-webhook:v1.21.1|cert-manager-webhook:v1.21.1"
+            "quay.io/jetstack/cert-manager-acmesolver:v1.21.1|cert-manager-acmesolver:v1.21.1"
+            "quay.io/jetstack/cert-manager-startupapicheck:v1.21.1|cert-manager-startupapicheck:v1.21.1"
+            "quay.io/prometheus-operator/prometheus-operator:v0.93.1|monitoring-prometheus-operator:v0.93.1"
+            "quay.io/prometheus-operator/prometheus-config-reloader:v0.93.1|monitoring-prometheus-config-reloader:v0.93.1"
+            "quay.io/prometheus/alertmanager:v0.34.0|monitoring-alertmanager:v0.34.0"
+            "quay.io/prometheus/node-exporter:v1.12.1-distroless|monitoring-node-exporter:v1.12.1-distroless"
+            "quay.io/prometheus/prometheus:v3.14.0-distroless|monitoring-prometheus:v3.14.0-distroless"
+            "quay.io/kiwigrid/k8s-sidecar:2.10.1|monitoring-k8s-sidecar:2.10.1"
+          )
+
+          for mapping in "${images[@]}"; do
+            source_image="${mapping%%|*}"
+            target_image="cr.yandex/${{ vars.CONTAINER_REGISTRY_ID }}/${mapping#*|}"
+            docker pull --platform linux/amd64 "$source_image"
+            docker tag "$source_image" "$target_image"
+            docker push "$target_image"
+          done
+
+      - name: Install ingress controller
+        shell: bash
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update ingress-nginx
+          helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+            --version 4.15.1 \
+            --namespace ingress-nginx \
+            --create-namespace \
+            --values kubernetes/ingress/values.yaml \
+            --wait \
+            --timeout 10m
+
+      - name: Install cert-manager
+        shell: bash
+        run: |
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update jetstack
+          helm upgrade --install cert-manager jetstack/cert-manager \
+            --version v1.21.1 \
+            --namespace cert-manager \
+            --create-namespace \
+            --set crds.enabled=true \
+            --set imageRegistry=cr.yandex \
+            --set imageNamespace=${{ vars.CONTAINER_REGISTRY_ID }} \
+            --wait \
+            --timeout 10m
+          kubectl apply -f kubernetes/ingress/cluster-issuer.yaml
+
+      - name: Install monitoring
+        shell: bash
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update prometheus-community
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --version 88.5.3 \
+            --namespace monitoring \
+            --create-namespace \
+            --values kubernetes/monitoring/values.yaml \
+            --set prometheusOperator.image.registry=cr.yandex \
+            --set prometheusOperator.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-prometheus-operator \
+            --set prometheusOperator.image.tag=v0.93.1 \
+            --set prometheusOperator.prometheusConfigReloader.image.registry=cr.yandex \
+            --set prometheusOperator.prometheusConfigReloader.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-prometheus-config-reloader \
+            --set prometheusOperator.prometheusConfigReloader.image.tag=v0.93.1 \
+            --set alertmanager.alertmanagerSpec.image.registry=cr.yandex \
+            --set alertmanager.alertmanagerSpec.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-alertmanager \
+            --set alertmanager.alertmanagerSpec.image.tag=v0.34.0 \
+            --set prometheus.prometheusSpec.image.registry=cr.yandex \
+            --set prometheus.prometheusSpec.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-prometheus \
+            --set prometheus.prometheusSpec.image.tag=v3.14.0-distroless \
+            --set prometheus-node-exporter.image.registry=cr.yandex \
+            --set prometheus-node-exporter.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-node-exporter \
+            --set prometheus-node-exporter.image.tag=v1.12.1 \
+            --set grafana.sidecar.image.registry=cr.yandex \
+            --set grafana.sidecar.image.repository=${{ vars.CONTAINER_REGISTRY_ID }}/monitoring-k8s-sidecar \
+            --set grafana.sidecar.image.tag=2.10.1 \
+            --wait \
+            --timeout 15m

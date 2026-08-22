@@ -22,7 +22,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: diplom-app
-          image: cr.yandex/crpir2qgou0nqqfn9ccn/diplom-app:latest
+          image: ghcr.io/mambastick/netology-devops-diplom:v1.0.1
           imagePullPolicy: Always
           ports:
             - name: http
