@@ -29,6 +29,10 @@
 
 Обычный коммит в `main`, затрагивающий приложение, получает тег образа вида `sha-xxxxxxx`. При создании Git-тега `v1.0.1` тот же тег получает Docker-образ, который после сборки разворачивается в кластере.
 
+- [успешный запуск Terraform](https://github.com/mambastick/netology-devops-diplom/actions/runs/32563250879);
+- [установка платформенных компонентов](https://github.com/mambastick/netology-devops-diplom/actions/runs/32564912614);
+- [сборка и деплой версии `v1.0.1`](https://github.com/mambastick/netology-devops-diplom/actions/runs/32563687447).
+
 ## Проверка
 
 ```bash
