@@ -31,11 +31,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Check required settings
+        env:
+          YC_KEY_JSON: ${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}
         shell: bash
         run: |
           test -n "${{ vars.CONTAINER_REGISTRY_ID }}"
           test -n "${{ vars.KUBERNETES_CLUSTER_ID }}"
-          test -n "${{ secrets.YC_SERVICE_ACCOUNT_KEY_JSON }}"
+          test -n "$YC_KEY_JSON"
 
       - name: Install Yandex Cloud CLI
         shell: bash
