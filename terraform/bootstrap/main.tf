@@ -7,6 +7,7 @@ locals {
   terraform_roles = toset([
     "container-registry.admin",
     "k8s.admin",
+    "k8s.cluster-api.cluster-admin",
     "kms.admin",
     "load-balancer.admin",
     "storage.admin",
